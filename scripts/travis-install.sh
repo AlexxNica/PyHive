@@ -10,7 +10,7 @@ sudo apt-get update
 #
 # LDAP
 #
-sudo -E apt-get -yq --no-install-suggests --no-install-recommends --force-yes install ldap-utils slapd
+sudo apt-get -y --no-install-suggests --no-install-recommends --force-yes install ldap-utils slapd
 sudo mkdir /tmp/slapd
 sudo slapd -f $(dirname $0)/ldap_config/slapd.conf -h ldap://localhost:3389 &
 sleep 10

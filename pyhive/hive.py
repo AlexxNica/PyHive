@@ -71,6 +71,10 @@ class Connection(object):
         """Connect to HiveServer2
 
         :param auth: The value of hive.server2.authentication used by HiveServer2
+        :param configuration: A dictionary of Hive settings (functionally same as the `set` command)
+        :param kerberos_service_name: Use with auth='KERBEROS' only
+        :param password: Use with auth='LDAP' only
+
         The way to support LDAP and GSSAPI is originated from cloudera/Impyla:
         https://github.com/cloudera/impyla/blob/255b07ed973d47a3395214ed92d35ec0615ebf62
         /impala/_thrift_api.py#L152-L160
@@ -78,37 +82,41 @@ class Connection(object):
         socket = thrift.transport.TSocket.TSocket(host, port)
         username = username or getpass.getuser()
         configuration = configuration or {}
+
+        if (password is not None) != (auth == 'LDAP'):
+            raise ValueError("password should be set if and only if in LDAP mode")
+        if (kerberos_service_name is not None) != (auth == 'KERBEROS'):
+            raise ValueError("kerberos_service_name should be set if and only if in KERBEROS mode")
+
         if auth == 'NOSASL':
             # NOSASL corresponds to hive.server2.authentication=NOSASL in hive-site.xml
             self._transport = thrift.transport.TTransport.TBufferedTransport(socket)
-        elif auth.upper() in ['LDAP', 'KERBEROS', 'NONE']:
-            if auth.upper() == 'KERBEROS' or kerberos_service_name:
-                # KERBEROS mode in hive.server2.authentication is
-                # GSSAPI in sasl library
-                auth = 'GSSAPI'
-            if password is None:
-                if auth == 'LDAP':
-                    raise NoPasswordError("LDAP authtication mechanism requires password")
-                else:
-                    # PLAIN always requires a password for HS2.
+        elif auth in ('LDAP', 'KERBEROS', 'NONE'):
+            if auth == 'KERBEROS':
+                # KERBEROS mode in hive.server2.authentication is GSSAPI in sasl library
+                sasl_auth = 'GSSAPI'
+            else:
+                sasl_auth = 'PLAIN'
+                if password is None:
+                    # Password doesn't matter in NONE mode, just needs to be nonempty.
                     password = b'x'
-            if auth.upper() in ['LDAP', 'NONE']:
-                # Follow the older version's convention
-                auth = 'PLAIN'
 
             def sasl_factory():
                 sasl_client = sasl.Client()
                 sasl_client.setAttr(b'host', host)
-                sasl_client.setAttr(b'service', kerberos_service_name)
-                if auth.upper() in ['PLAIN', 'LDAP']:
+                if sasl_auth == 'GSSAPI':
+                    sasl_client.setAttr(b'service', kerberos_service_name)
+                elif sasl_auth == 'PLAIN':
                     sasl_client.setAttr(b'username', username.encode('latin-1'))
                     sasl_client.setAttr(b'password', password)
+                else:
+                    raise AssertionError
                 sasl_client.init()
                 return sasl_client
-            self._transport = thrift_sasl.TSaslClientTransport(sasl_factory, auth, socket)
+            self._transport = thrift_sasl.TSaslClientTransport(sasl_factory, sasl_auth, socket)
         else:
             raise NotImplementedError(
-                "Only NONE,NOSASL,LDAP,KERBEROS"
+                "Only NONE, NOSASL, LDAP, KERBEROS "
                 "authentication are supported, got {}".format(auth))
 
         protocol = thrift.protocol.TBinaryProtocol.TBinaryProtocol(self._transport)
